@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>本地拼图</title>
+  <style>
+    :root {
+      --bg: radial-gradient(circle at 20% 20%, #eef3ff 0%, #f9fbff 30%, #eef6ff 70%, #e5f0ff 100%);
+      --accent: #0f6d9c;
+      --panel: rgba(255, 255, 255, 0.9);
+      --grid: #d6e2f5;
+      --board: #f2f6fd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Space Grotesk", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: #0f1c2e;
+      min-height: 100vh;
+    }
+    .wrap {
+      max-width: 1620px;
+      margin: 16px auto;
+      background: rgba(255, 255, 255, 0.85);
+      border-radius: 14px;
+      box-shadow: 0 12px 36px rgba(15, 31, 52, 0.12);
+      overflow: hidden;
+      border: 1px solid #dbe6f5;
+    }
+    header {
+      padding: 12px 16px;
+      background: var(--panel);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid #dbe6f5;
+      z-index: 3;
+    }
+    header h1 {
+      font-size: 16px;
+      margin: 0 12px 0 0;
+      letter-spacing: 0.5px;
+    }
+    .hint {
+      font-size: 13px;
+      color: #4a5c75;
+      margin-left: auto;
+    }
+    .field {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+    input[type="number"] {
+      width: 56px;
+      padding: 6px 8px;
+      border: 1px solid #c8d7eb;
+      border-radius: 6px;
+      background: #fff;
+    }
+    button {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform 0.1s ease, box-shadow 0.15s ease;
+    }
+    button:active { transform: translateY(1px); }
+    button.secondary {
+      background: #fff;
+      color: #0f1c2e;
+      border: 1px solid #c8d7eb;
+    }
+    #stage {
+      position: relative;
+      width: 100%;
+      height: 800px;
+      max-height: 80vh;
+      overflow: hidden;
+      background: linear-gradient(135deg, #f7f9ff 0%, #eef4ff 100%);
+    }
+    #board {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--board);
+      border: 2px dashed var(--grid);
+      box-shadow: 0 10px 30px rgba(15, 31, 52, 0.1);
+      transition: width 0.2s ease, height 0.2s ease;
+    }
+    #board::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px),
+                        linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+      background-size: var(--cell-w) var(--cell-h), var(--cell-w) var(--cell-h);
+      opacity: 0.8;
+      pointer-events: none;
+    }
+    .piece {
+      position: absolute;
+      user-select: none;
+      touch-action: none;
+      cursor: grab;
+      filter: drop-shadow(0 5px 12px rgba(15, 31, 52, 0.25));
+      transition: transform 0.15s ease;
+    }
+    .piece.dragging {
+      cursor: grabbing;
+      transform: scale(1.03);
+      z-index: 10;
+    }
+    .toast {
+      position: absolute;
+      right: 16px;
+      bottom: 16px;
+      background: #0f1c2e;
+      color: #f6f8fb;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      box-shadow: 0 6px 18px rgba(15, 31, 52, 0.22);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      pointer-events: none;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>本地拼图</h1>
+      <label class="field">
+        <span>选择碎片文件夹:</span>
+        <input type="file" id="folderInput" webkitdirectory directory multiple>
+      </label>
+      <label class="field">
+        <span>行:</span><input type="number" id="rowsInput" value="3" min="1">
+      </label>
+      <label class="field">
+        <span>列:</span><input type="number" id="colsInput" value="4" min="1">
+      </label>
+      <button id="shuffleBtn" class="secondary">重新散落</button>
+      <div class="hint">拖动碎片到中间网格，靠近正确格子会吸附</div>
+    </header>
+
+    <div id="stage">
+      <div id="board"></div>
+      <div class="toast" id="toast"></div>
+    </div>
+  </div>
+
+  <script>
+    const folderInput = document.getElementById("folderInput");
+    const rowsInput = document.getElementById("rowsInput");
+    const colsInput = document.getElementById("colsInput");
+    const stage = document.getElementById("stage");
+    const board = document.getElementById("board");
+    const toast = document.getElementById("toast");
+    const shuffleBtn = document.getElementById("shuffleBtn");
+
+    let pieces = [];
+    let cellW = 120;
+    let cellH = 120;
+    const sizeScale = 0.5; // 缩小板单元和部件渲染尺寸
+    const gridTightnessX = 0.62; // <1 使左右更紧密（减小列间距）
+    const gridTightnessY = 0.54; // <1 使上下更紧密（减小行间距）
+    const colGap = 2; // 每一列额外间距（px）：让“下一张”整体往右偏移
+    const rowGap = 0; // 每一行额外间距（px）
+    const snapOffsetX = 0; // 吸附后额外偏移（px），例如 -2/+2
+    const snapOffsetY = 0; // 吸附后额外偏移（px），例如 -2/+2
+    let boardRect = null;
+    let dragState = null;
+
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add("show");
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(() => toast.classList.remove("show"), 1600);
+    }
+
+    folderInput.addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files || []).filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name));
+      if (!files.length) return;
+      const parsed = parseGridFromNames(files);
+      if (parsed) {
+        if (!rowsInput.value) rowsInput.value = parsed.rows;
+        if (!colsInput.value) colsInput.value = parsed.cols;
+      }
+      const data = await Promise.all(files.map(loadImageFile));
+      spawnPieces(data);
+      showToast(`已载入 ${data.length} 个碎片`);
+    });
+
+    shuffleBtn.addEventListener("click", () => scatterPieces());
+
+    function parseGridFromNames(files) {
+      let maxR = -1, maxC = -1, count = 0;
+      const pattern = /r(\d+)_c(\d+)/i;
+      for (const f of files) {
+        const m = f.name.match(pattern);
+        if (m) {
+          maxR = Math.max(maxR, parseInt(m[1], 10));
+          maxC = Math.max(maxC, parseInt(m[2], 10));
+          count++;
+        }
+      }
+      if (count === 0) return null;
+      return { rows: maxR + 1, cols: maxC + 1 };
+    }
+
+    function loadImageFile(file) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => resolve({ file, src: reader.result, w: img.naturalWidth, h: img.naturalHeight });
+          img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function spawnPieces(data) {
+      stage.querySelectorAll(".piece").forEach(el => el.remove());
+      pieces = [];
+
+      const rows = Math.max(1, parseInt(rowsInput.value, 10) || 3);
+      const cols = Math.max(1, parseInt(colsInput.value, 10) || 4);
+
+      const avgW = Math.max(40, Math.round(data.reduce((s, d) => s + d.w, 0) / data.length));
+      const avgH = Math.max(40, Math.round(data.reduce((s, d) => s + d.h, 0) / data.length));
+      const avgDisplayW = Math.max(24, Math.round(avgW * sizeScale));
+      const avgDisplayH = Math.max(24, Math.round(avgH * sizeScale));
+      cellW = Math.max(24, Math.round(avgDisplayW * gridTightnessX));
+      cellH = Math.max(24, Math.round(avgDisplayH * gridTightnessY));
+      const stepX = cellW + colGap;
+      const stepY = cellH + rowGap;
+
+      board.style.setProperty("--cell-w", `${stepX}px`);
+      board.style.setProperty("--cell-h", `${stepY}px`);
+      board.style.width = `${cols * cellW + Math.max(0, cols - 1) * colGap}px`;
+      board.style.height = `${rows * cellH + Math.max(0, rows - 1) * rowGap}px`;
+      boardRect = board.getBoundingClientRect();
+
+      data.forEach((item, i) => {
+        const piece = document.createElement("img");
+        piece.src = item.src;
+        piece.className = "piece";
+        piece.draggable = false;
+        piece.dataset.index = i;
+        const displayW = Math.max(24, Math.round(item.w * sizeScale));
+        const displayH = Math.max(24, Math.round(item.h * sizeScale));
+        piece.style.width = `${displayW}px`;
+        piece.style.height = `${displayH}px`;
+        piece.dataset.displayW = displayW;
+        piece.dataset.displayH = displayH;
+        const match = item.file.name.match(/r(\d+)_c(\d+)/i);
+        if (match) {
+          piece.dataset.targetRow = parseInt(match[1], 10);
+          piece.dataset.targetCol = parseInt(match[2], 10);
+        }
+        stage.appendChild(piece);
+        pieces.push(piece);
+      });
+
+      requestAnimationFrame(scatterPieces);
+    }
+
+    function scatterPieces() {
+      const stageRect = stage.getBoundingClientRect();
+      boardRect = board.getBoundingClientRect();
+      const margin = 24;
+
+      pieces.forEach((piece, idx) => {
+        const { w, h } = getPieceSize(piece);
+        const side = idx % 4;
+        let x, y;
+        switch (side) {
+          case 0: // top
+            x = rand(margin, stageRect.width - margin - w);
+            y = rand(margin, Math.max(margin, boardRect.top - stageRect.top - h - 10));
+            break;
+          case 1: // right
+            x = rand(Math.min(stageRect.width - margin - w, boardRect.right - stageRect.left + 10), stageRect.width - margin - w);
+            y = rand(margin, stageRect.height - margin - h);
+            break;
+          case 2: // bottom
+            x = rand(margin, stageRect.width - margin - w);
+            y = rand(Math.min(stageRect.height - margin - h, boardRect.bottom - stageRect.top + 10), stageRect.height - margin - h);
+            break;
+          default: // left
+            x = rand(margin, Math.max(margin, boardRect.left - stageRect.left - w - 10));
+            y = rand(margin, stageRect.height - margin - h);
+        }
+        placePiece(piece, x, y);
+      });
+    }
+
+    function placePiece(piece, x, y) {
+      const { w, h } = getPieceSize(piece);
+      const stageRect = stage.getBoundingClientRect();
+      const minX = 4;
+      const minY = 4;
+      const maxX = Math.max(minX, stageRect.width - w - 4);
+      const maxY = Math.max(minY, stageRect.height - h - 4);
+      const clampedX = Math.min(maxX, Math.max(minX, x));
+      const clampedY = Math.min(maxY, Math.max(minY, y));
+      piece.style.left = `${clampedX}px`;
+      piece.style.top = `${clampedY}px`;
+    }
+
+    function rand(min, max) {
+      if (max <= min) return min;
+      return Math.max(min, Math.min(max, min + Math.random() * (max - min)));
+    }
+
+    stage.addEventListener("pointerdown", (e) => {
+      const piece = e.target.closest(".piece");
+      if (!piece) return;
+      piece.setPointerCapture(e.pointerId);
+      dragState = {
+        piece,
+        startX: e.clientX,
+        startY: e.clientY,
+        baseLeft: parseFloat(piece.style.left) || 0,
+        baseTop: parseFloat(piece.style.top) || 0,
+      };
+      piece.classList.add("dragging");
+      piece.style.zIndex = 20;
+    });
+
+    stage.addEventListener("pointermove", (e) => {
+      if (!dragState) return;
+      const dx = e.clientX - dragState.startX;
+      const dy = e.clientY - dragState.startY;
+      const x = dragState.baseLeft + dx;
+      const y = dragState.baseTop + dy;
+      placePiece(dragState.piece, x, y);
+    });
+
+    stage.addEventListener("pointerup", (e) => finishDrag(e));
+    stage.addEventListener("pointercancel", (e) => finishDrag(e));
+
+    function finishDrag(e) {
+      if (!dragState) return;
+      const { piece } = dragState;
+      piece.releasePointerCapture(e.pointerId);
+      piece.classList.remove("dragging");
+      piece.style.zIndex = 5;
+
+      snapPiece(piece);
+      dragState = null;
+    }
+
+    function snapPiece(piece) {
+      boardRect = board.getBoundingClientRect();
+      const stageRect = stage.getBoundingClientRect();
+      const { w, h } = getPieceSize(piece);
+      const px = parseFloat(piece.style.left) || 0;
+      const py = parseFloat(piece.style.top) || 0;
+      const centerX = px + w / 2;
+      const centerY = py + h / 2;
+
+      const inside = centerX >= (boardRect.left - stageRect.left) &&
+                     centerX <= (boardRect.right - stageRect.left) &&
+                     centerY >= (boardRect.top - stageRect.top) &&
+                     centerY <= (boardRect.bottom - stageRect.top);
+
+      if (!inside) return;
+
+      const localX = centerX - (boardRect.left - stageRect.left);
+      const localY = centerY - (boardRect.top - stageRect.top);
+
+      const stepX = cellW + colGap;
+      const stepY = cellH + rowGap;
+      let snapX = (Math.round(localX / stepX - 0.5) + 0.5) * stepX;
+      let snapY = (Math.round(localY / stepY - 0.5) + 0.5) * stepY;
+
+      const targetRow = piece.dataset.targetRow ? parseInt(piece.dataset.targetRow, 10) : null;
+      const targetCol = piece.dataset.targetCol ? parseInt(piece.dataset.targetCol, 10) : null;
+      if (targetRow !== null && targetCol !== null) {
+        const goalX = (targetCol + 0.5) * stepX;
+        const goalY = (targetRow + 0.5) * stepY;
+        const dist = Math.hypot(localX - goalX, localY - goalY);
+        const tolerance = 0.35 * Math.min(cellW, cellH);
+        if (dist < tolerance) {
+          snapX = goalX;
+          snapY = goalY;
+        }
+      }
+
+      const finalLeft = snapX - w / 2 + (boardRect.left - stageRect.left) + snapOffsetX;
+      const finalTop = snapY - h / 2 + (boardRect.top - stageRect.top) + snapOffsetY;
+      placePiece(piece, finalLeft, finalTop);
+    }
+
+    function getPieceSize(piece) {
+      const w = parseFloat(piece.dataset.displayW) || piece.naturalWidth;
+      const h = parseFloat(piece.dataset.displayH) || piece.naturalHeight;
+      return { w, h };
+    }
+  </script>
+</body>
+</html>
