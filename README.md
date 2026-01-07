@@ -40,3 +40,4 @@ python jigsaw_split.py sample.png --rows 3 --cols 4 --output pieces --seed 7
 2. 选择上一步生成的 `pieces` 文件夹
 3. 拖动碎片到中间容器拼合（靠近正确格子会吸附）
 
+![image](images/930a021e752da117dbd4268c59a56f2a.png)
